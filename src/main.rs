@@ -6,13 +6,17 @@ use std::time::Duration;
 use deno_core::ByteString;
 use deno_core::Extension;
 use deno_core::JsRuntime;
+use deno_core::ModuleCodeBytes;
 use deno_core::ModuleLoadResponse;
 use deno_core::ModuleLoader;
 use deno_core::ModuleSource;
+use deno_core::ModuleSourceCode;
 use deno_core::ModuleSpecifier;
 use deno_core::ModuleType;
+use deno_core::OpDecl;
 use deno_core::OpState;
 use deno_core::PollEventLoopOptions;
+use deno_core::RequestedModuleType;
 use deno_core::RuntimeOptions;
 use deno_core::anyhow::anyhow;
 use deno_core::error::AnyError;
@@ -20,8 +24,7 @@ use deno_core::error::ModuleLoaderError;
 use deno_core::op2;
 use deno_core::url::Url;
 use futures::FutureExt;
-use deno_core::RequestedModuleType;
-use deno_core::ModuleSourceCode;
+use std::vec::Vec;
 
 #[op2(fast)]
 // I had to declare it as core error because somehow
@@ -59,18 +62,16 @@ async fn main() {
 }
 
 async fn run_module(specifier: &ModuleSpecifier) -> Result<(), deno_core::anyhow::Error> {
-
     let ext2 = Extension::default();
-    let ops = vec![]
+    ops!(deno_ops, [op_log, op_sleep]);
+
     // Build a deno_core::Extension providing custom ops
     let ext = Extension::builder("zinnia")
         .ops(vec![
             // An op for summing an array of numbers
             // The op-layer automatically deserializes inputs
             // and serializes the returned Result & value
-            op_log::decl(),
-            op_sleep::decl(),
-            op_base64_atob::decl(),
+            op_log, op_sleep,
         ])
         .build();
 
@@ -123,20 +124,19 @@ async fn run_module(specifier: &ModuleSpecifier) -> Result<(), deno_core::anyhow
     // println!("running the event loop");
     let polloptions = PollEventLoopOptions::default();
     runtime.run_event_loop(polloptions).await?;
-    // ** to check if poll options should be default or should be set to both false ? ** 
+    // ** to check if poll options should be default or should be set to both false ? **
     // println!("awaiting module evaluation result");
     res.await;
 
     Ok(())
 }
 
-// #[op2(fast)]
-// fn op_base64_atob(mut s: ByteString) -> Result<ByteString, AnyError> {
-//   let decoded_len = forgiving_base64_decode_inplace(&mut s)?;
-//   s.truncate(decoded_len);
-//   Ok(s)
-// }
-
+#[op2(fast)]
+fn op_base64_atob(#[to_v8] mut s: ByteString) -> Result<ByteString, AnyError> {
+  let decoded_len = forgiving_base64_decode_inplace(&mut s)?;
+  s.truncate(decoded_len);
+  Ok(s)
+}
 
 #[inline]
 fn forgiving_base64_decode_inplace(input: &mut [u8]) -> Result<usize, AnyError> {
@@ -165,23 +165,25 @@ impl ModuleLoader for ZinniaModuleLoader {
 
     fn load(
         &self,
-        module_specifier: &deno_core::ModuleSpecifier,
+        module_specifier: &ModuleSpecifier,
         _maybe_referrer: Option<&ModuleSpecifier>,
         is_dyn_import: bool,
         requested_module_type: RequestedModuleType,
     ) -> ModuleLoadResponse {
-        let specifier = String::from(module_specifier.as_str());
-        async move {
-            if is_dyn_import {
-                return Err(anyhow!(
-                    "Zinnia does not support dynamic imports. (URL: {})",
-                    specifier
-                ));
-            }
+        // 1) Clone the ModuleSpecifier so that the future owns it.
+        let owned_specifier: ModuleSpecifier = module_specifier.clone();
+        // 2) Also make an owned String for matching on its text.
+        let specifier_string: String = owned_specifier.as_str().to_string();
 
-            let code = {
-                match specifier.as_str() {
-                    "zinnia://demo-module.js" => include_str!("../mod-js/demo-module.js"),
+        ModuleLoadResponse::Async(
+            async move {
+                if is_dyn_import {
+                    return Err(ModuleLoaderError::NotFound);
+                }
+
+                // 3) Match on the *owned* `specifier_string`.
+                let code: &'static str = match specifier_string.as_str() {
+                    "zinnia://demo-module.js" => include_str!("./mod-js/demo-module.js"),
                     "zinnia://demo-module-rs.js" => {
                         r#"
 import {instantiate} from 'zinnia://demo-module-rs.loader.js';
@@ -205,15 +207,24 @@ await run();
 "#
                     }
                     "zinnia://demo-module-rs.loader.js" => {
-                        include_str!("../target/deno/mod_rs.generated.js")
+                        include_str!("../mod-rs/lib/mod_rs.js")
                     }
-                    _ => Err(ModuleLoaderError::NotFound),
-                }
-            };
+                    _ => "not found ",
+                };
 
-            let module = ModuleSource::new(ModuleType::JavaScript,ModuleSourceCode::Bytes(code),module_specifier,None) ;
-            Ok(module)
-        }
-        .boxed_local();
+                let modulecodebytes = ModuleCodeBytes::from(code.as_bytes());
+
+                // 4) When creating ModuleSource, pass a reference to the *owned* specifier.
+                let module = ModuleSource::new(
+                    ModuleType::JavaScript,
+                    ModuleSourceCode::Bytes(modulecodebytes),
+                    &owned_specifier,
+                    None,
+                );
+
+                Ok(module)
+            }
+            .boxed_local(), // now the future is `'static` because it only owns its data
+        )
     }
 }

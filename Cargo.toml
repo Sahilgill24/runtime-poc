@@ -1,0 +1,15 @@
+[package]
+name = "runtime-poc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64-simd = "0.8.0"
+deno_core = "0.347.0"
+futures = "0.3.31"
+tokio = {version = "*", features = ["full"]}
+
+[workspace]
+members = [
+    "mod-rs",
+]

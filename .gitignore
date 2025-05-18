@@ -1,1 +1,5 @@
 /mod-rs/target
+
+# Added by cargo
+
+/target

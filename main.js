@@ -1,17 +1,19 @@
 import { run } from './mod-rs/lib/mod_rs.js'
 
+// These tell the rust code that the zinnia_log was this function
+// in actual
 Zinnia.log = (msg) => { console.log(msg); };
 Zinnia.sleep = (ms) => {
     return new Promise(r => setTimeout(r, Number(ms)));
 };
-// This is a Javascript API only 
+// 
 // const Zinnia = {
 //     log(msg) {
-//         console.log(msg);
+//         Deno.core.op_log(msg);
 // here would have to add Deno.core.ops etc. 
 //     },
 //     sleep(ms) {
-//         return new Promise(resolve => setTimeout(resolve, ms));
+//         return Deno.core.ops.op_sleep(ms);
 //     }
 // }
 
